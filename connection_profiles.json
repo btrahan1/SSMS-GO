@@ -1,0 +1,17 @@
+[
+  {
+    "id": "mrvqlakierj874d4ifw",
+    "name": "MSI\\SQLEXPRESS01 (default)",
+    "server": "MSI\\SQLEXPRESS01",
+    "authType": "windows",
+    "username": "sa"
+  },
+  {
+    "id": "mrvqmn913x5cgyr5ef7",
+    "name": "moneycenter.database.windows.net (default)",
+    "server": "moneycenter.database.windows.net",
+    "authType": "sql",
+    "username": "dodgesit",
+    "password": "Youngblood2016$"
+  }
+]

@@ -1,0 +1,21 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+build/bin/
+SSMS-Go.exe
+
+# Node dependencies & build output
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+
+# IDE / OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
