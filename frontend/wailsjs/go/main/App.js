@@ -62,10 +62,6 @@ export function GetStatusInfo() {
   return window['go']['main']['App']['GetStatusInfo']();
 }
 
-export function GetTableDefinition(arg1, arg2) {
-  return window['go']['main']['App']['GetTableDefinition'](arg1, arg2);
-}
-
 export function GetTableDefinitionForServer(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetTableDefinitionForServer'](arg1, arg2, arg3);
 }

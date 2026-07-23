@@ -284,7 +284,6 @@ export namespace main {
 	        this.message = source["message"];
 	    }
 	}
-
 	export class TableSchemaColumn {
 	    ColumnName: string;
 	    DataType: string;

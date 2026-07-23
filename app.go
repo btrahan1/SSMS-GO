@@ -3,16 +3,104 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
+	"unsafe"
 
 	_ "github.com/microsoft/go-mssqldb"
 	_ "github.com/microsoft/go-mssqldb/namedpipe"
 )
+
+type DATA_BLOB struct {
+	cbData uint32
+	pbData *byte
+}
+
+func encryptPasswordDPAPI(plainText string) (string, error) {
+	if plainText == "" {
+		return "", nil
+	}
+
+	crypt32 := syscall.NewLazyDLL("crypt32.dll")
+	procCryptProtectData := crypt32.NewProc("CryptProtectData")
+
+	dataInBytes := []byte(plainText)
+	var dataIn DATA_BLOB
+	dataIn.cbData = uint32(len(dataInBytes))
+	if len(dataInBytes) > 0 {
+		dataIn.pbData = &dataInBytes[0]
+	}
+
+	var dataOut DATA_BLOB
+	r, _, err := procCryptProtectData.Call(
+		uintptr(unsafe.Pointer(&dataIn)),
+		0, 0, 0, 0, 0,
+		uintptr(unsafe.Pointer(&dataOut)),
+	)
+	if r == 0 {
+		return "", fmt.Errorf("CryptProtectData failed: %v", err)
+	}
+
+	outBytes := unsafe.Slice(dataOut.pbData, dataOut.cbData)
+	encoded := base64.StdEncoding.EncodeToString(outBytes)
+
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	procLocalFree := kernel32.NewProc("LocalFree")
+	procLocalFree.Call(uintptr(unsafe.Pointer(dataOut.pbData)))
+
+	return "dpapi:" + encoded, nil
+}
+
+func decryptPasswordDPAPI(cipherText string) (string, error) {
+	if cipherText == "" {
+		return "", nil
+	}
+
+	if !strings.HasPrefix(cipherText, "dpapi:") {
+		return cipherText, nil
+	}
+
+	rawB64 := strings.TrimPrefix(cipherText, "dpapi:")
+	dataBytes, err := base64.StdEncoding.DecodeString(rawB64)
+	if err != nil {
+		return cipherText, err
+	}
+
+	crypt32 := syscall.NewLazyDLL("crypt32.dll")
+	procCryptUnprotectData := crypt32.NewProc("CryptUnprotectData")
+
+	var dataIn DATA_BLOB
+	dataIn.cbData = uint32(len(dataBytes))
+	if len(dataBytes) > 0 {
+		dataIn.pbData = &dataBytes[0]
+	}
+
+	var dataOut DATA_BLOB
+	r, _, err := procCryptUnprotectData.Call(
+		uintptr(unsafe.Pointer(&dataIn)),
+		0, 0, 0, 0, 0,
+		uintptr(unsafe.Pointer(&dataOut)),
+	)
+	if r == 0 {
+		return "", fmt.Errorf("CryptUnprotectData failed: %v", err)
+	}
+
+	outBytes := unsafe.Slice(dataOut.pbData, dataOut.cbData)
+	result := string(outBytes)
+
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	procLocalFree := kernel32.NewProc("LocalFree")
+	procLocalFree.Call(uintptr(unsafe.Pointer(dataOut.pbData)))
+
+	return result, nil
+}
 
 type ConnectionResponse struct {
 	Success      bool   `json:"success"`
@@ -134,6 +222,7 @@ type ServerConnectionHandle struct {
 
 type App struct {
 	ctx              context.Context
+	mu               sync.RWMutex
 	db               *sql.DB
 	servers          map[string]*ServerConnectionHandle
 	isConnected      bool
@@ -183,18 +272,24 @@ func (a *App) getDbForDatabase(databaseName string) (*sql.DB, error) {
 }
 
 func (a *App) ConnectServerWithId(id string, connStr string, serverName string, dbName string) ConnectionResponse {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.servers == nil {
 		a.servers = make(map[string]*ServerConnectionHandle)
 	}
 
 	if existing, found := a.servers[id]; found && existing != nil {
+		closed := make(map[*sql.DB]bool)
 		if existing.DB != nil {
 			existing.DB.Close()
+			closed[existing.DB] = true
 		}
 		if existing.DBMap != nil {
 			for _, db := range existing.DBMap {
-				if db != nil && db != existing.DB {
+				if db != nil && !closed[db] {
 					db.Close()
+					closed[db] = true
 				}
 			}
 		}
@@ -241,15 +336,21 @@ func (a *App) ConnectServerWithId(id string, connStr string, serverName string, 
 }
 
 func (a *App) DisconnectServerWithId(id string) DisconnectResponse {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.servers != nil {
 		if handle, found := a.servers[id]; found && handle != nil {
+			closed := make(map[*sql.DB]bool)
 			if handle.DB != nil {
 				handle.DB.Close()
+				closed[handle.DB] = true
 			}
 			if handle.DBMap != nil {
 				for _, db := range handle.DBMap {
-					if db != nil && db != handle.DB {
+					if db != nil && !closed[db] {
 						db.Close()
+						closed[db] = true
 					}
 				}
 			}
@@ -266,6 +367,9 @@ func (a *App) DisconnectServerWithId(id string) DisconnectResponse {
 }
 
 func (a *App) getServerHandle(serverId string) (*ServerConnectionHandle, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	if serverId == "" {
 		if len(a.servers) > 0 {
 			for _, h := range a.servers {
@@ -301,11 +405,14 @@ func (a *App) getDbForDatabaseOnServer(handle *ServerConnectionHandle, databaseN
 		return handle.DB, nil
 	}
 
+	a.mu.RLock()
 	if handle.DBMap != nil {
 		if targetDb, exists := handle.DBMap[databaseName]; exists && targetDb != nil {
+			a.mu.RUnlock()
 			return targetDb, nil
 		}
 	}
+	a.mu.RUnlock()
 
 	isAzureDomain := strings.Contains(strings.ToLower(handle.ServerName), ".database.windows.net") ||
 		strings.Contains(strings.ToLower(handle.RawConnStr), ".database.windows.net")
@@ -318,10 +425,12 @@ func (a *App) getDbForDatabaseOnServer(handle *ServerConnectionHandle, databaseN
 			conn.Close()
 			cancel()
 			if useErr == nil {
+				a.mu.Lock()
 				if handle.DBMap == nil {
 					handle.DBMap = make(map[string]*sql.DB)
 				}
 				handle.DBMap[databaseName] = handle.DB
+				a.mu.Unlock()
 				return handle.DB, nil
 			}
 		} else {
@@ -348,10 +457,12 @@ func (a *App) getDbForDatabaseOnServer(handle *ServerConnectionHandle, databaseN
 		return nil, fmt.Errorf("Error pinging database %s: %v", databaseName, err)
 	}
 
+	a.mu.Lock()
 	if handle.DBMap == nil {
 		handle.DBMap = make(map[string]*sql.DB)
 	}
 	handle.DBMap[databaseName] = targetDb
+	a.mu.Unlock()
 	return targetDb, nil
 }
 
@@ -471,7 +582,7 @@ func (a *App) GetTableSchemaForServer(serverId string, databaseName, tableName s
 		_, _ = conn.ExecContext(a.ctx, fmt.Sprintf("USE [%s];", databaseName))
 	}
 
-	query := fmt.Sprintf(`
+	query := `
 		SELECT
 			c.COLUMN_NAME,
 			c.DATA_TYPE,
@@ -500,12 +611,12 @@ func (a *App) GetTableSchemaForServer(serverId string, databaseName, tableName s
 			AND c.TABLE_SCHEMA = pk.TABLE_SCHEMA
 			AND c.TABLE_NAME = pk.TABLE_NAME
 		WHERE
-			c.TABLE_NAME = '%[1]s' AND c.TABLE_SCHEMA = '%[2]s'
+			c.TABLE_NAME = @p1 AND c.TABLE_SCHEMA = @p2
 		ORDER BY
 			c.ORDINAL_POSITION;
-	`, actualTableName, tableSchema)
+	`
 
-	rows, err := conn.QueryContext(a.ctx, query)
+	rows, err := conn.QueryContext(a.ctx, query, actualTableName, tableSchema)
 	if err != nil {
 		return TableSchemaResponse{Schema: []TableSchemaColumn{}, Message: fmt.Sprintf("Error getting schema: %v", err)}
 	}
@@ -720,19 +831,19 @@ func (a *App) GetRoutineParametersForServer(serverId string, databaseName, routi
 		_, _ = conn.ExecContext(a.ctx, fmt.Sprintf("USE [%s];", databaseName))
 	}
 
-	query := fmt.Sprintf(`
+	query := `
 		SELECT 
 			p.PARAMETER_NAME,
 			p.DATA_TYPE,
 			p.CHARACTER_MAXIMUM_LENGTH,
-			CASE WHEN p.PARAMETER_MODE LIKE '%%OUT%%' THEN 1 ELSE 0 END AS IsOutput,
+			CASE WHEN p.PARAMETER_MODE LIKE '%OUT%' THEN 1 ELSE 0 END AS IsOutput,
 			p.ORDINAL_POSITION
 		FROM INFORMATION_SCHEMA.PARAMETERS p
-		WHERE p.SPECIFIC_SCHEMA = '%[1]s' AND p.SPECIFIC_NAME = '%[2]s' AND p.PARAMETER_NAME <> ''
+		WHERE p.SPECIFIC_SCHEMA = @p1 AND p.SPECIFIC_NAME = @p2 AND p.PARAMETER_NAME <> ''
 		ORDER BY p.ORDINAL_POSITION;
-	`, rSchema, rName)
+	`
 
-	rows, err := conn.QueryContext(a.ctx, query)
+	rows, err := conn.QueryContext(a.ctx, query, rSchema, rName)
 	if err != nil {
 		return RoutineParametersResponse{Parameters: []RoutineParameter{}, Message: fmt.Sprintf("Error getting parameters: %v", err)}
 	}
@@ -792,17 +903,17 @@ func (a *App) GetRoutineDefinitionForServer(serverId string, databaseName, routi
 		_, _ = conn.ExecContext(a.ctx, fmt.Sprintf("USE [%s];", databaseName))
 	}
 
-	query := fmt.Sprintf(`
+	query := `
 		SELECT 
-			COALESCE(OBJECT_DEFINITION(OBJECT_ID(QUOTENAME('%[1]s') + '.' + QUOTENAME('%[2]s'))), m.definition, '') AS Definition,
+			COALESCE(OBJECT_DEFINITION(OBJECT_ID(QUOTENAME(@p1) + '.' + QUOTENAME(@p2))), m.definition, '') AS Definition,
 			o.type_desc AS RoutineType
 		FROM sys.objects o
 		LEFT JOIN sys.sql_modules m ON o.object_id = m.object_id
-		WHERE o.object_id = OBJECT_ID(QUOTENAME('%[1]s') + '.' + QUOTENAME('%[2]s'))
-	`, rSchema, rName)
+		WHERE o.object_id = OBJECT_ID(QUOTENAME(@p1) + '.' + QUOTENAME(@p2))
+	`
 
 	var definition, routineType string
-	err = conn.QueryRowContext(a.ctx, query).Scan(&definition, &routineType)
+	err = conn.QueryRowContext(a.ctx, query, rSchema, rName).Scan(&definition, &routineType)
 	if err != nil {
 		return RoutineDefinitionResponse{Definition: "", Message: fmt.Sprintf("Error fetching definition for %s: %v", routineName, err)}
 	}
@@ -948,7 +1059,11 @@ func (a *App) ExecuteNonQuery(databaseName, query string) ExecuteQueryResponse {
 
 // ListConnectionProfiles reads and returns all saved connection profiles from file
 func (a *App) ListConnectionProfiles() ConnectionProfilesResponse {
-	data, err := os.ReadFile(a.profilesFilePath)
+	a.mu.RLock()
+	filePath := a.profilesFilePath
+	a.mu.RUnlock()
+
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return ConnectionProfilesResponse{
 			Profiles: []ConnectionProfile{},
@@ -962,10 +1077,19 @@ func (a *App) ListConnectionProfiles() ConnectionProfilesResponse {
 			Message:  fmt.Sprintf("Error reading profiles: %v", err),
 		}
 	}
-	// Ensure we return empty array not null
 	if profiles == nil {
 		profiles = []ConnectionProfile{}
 	}
+
+	for i := range profiles {
+		if profiles[i].Password != "" {
+			decrypted, err := decryptPasswordDPAPI(profiles[i].Password)
+			if err == nil {
+				profiles[i].Password = decrypted
+			}
+		}
+	}
+
 	return ConnectionProfilesResponse{
 		Profiles: profiles,
 		Message:  "Profiles loaded",
@@ -974,6 +1098,17 @@ func (a *App) ListConnectionProfiles() ConnectionProfilesResponse {
 
 // SaveConnectionProfile saves a connection profile (creates or updates)
 func (a *App) SaveConnectionProfile(profile ConnectionProfile) ConnectionProfilesResponse {
+	profileToSave := profile
+	if profileToSave.Password != "" {
+		encrypted, err := encryptPasswordDPAPI(profileToSave.Password)
+		if err == nil {
+			profileToSave.Password = encrypted
+		}
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	var profiles []ConnectionProfile
 	data, err := os.ReadFile(a.profilesFilePath)
 	if err == nil {
@@ -985,14 +1120,14 @@ func (a *App) SaveConnectionProfile(profile ConnectionProfile) ConnectionProfile
 
 	found := false
 	for i, p := range profiles {
-		if p.ID == profile.ID {
-			profiles[i] = profile
+		if p.ID == profileToSave.ID {
+			profiles[i] = profileToSave
 			found = true
 			break
 		}
 	}
 	if !found {
-		profiles = append(profiles, profile)
+		profiles = append(profiles, profileToSave)
 	}
 
 	if err := a.saveProfiles(profiles); err != nil {
@@ -1001,6 +1136,16 @@ func (a *App) SaveConnectionProfile(profile ConnectionProfile) ConnectionProfile
 			Message:  fmt.Sprintf("Error saving profile: %v", err),
 		}
 	}
+
+	for i := range profiles {
+		if profiles[i].Password != "" {
+			decrypted, err := decryptPasswordDPAPI(profiles[i].Password)
+			if err == nil {
+				profiles[i].Password = decrypted
+			}
+		}
+	}
+
 	return ConnectionProfilesResponse{
 		Profiles: profiles,
 		Message:  "Profile saved",
@@ -1009,6 +1154,9 @@ func (a *App) SaveConnectionProfile(profile ConnectionProfile) ConnectionProfile
 
 // DeleteConnectionProfile removes a connection profile by ID
 func (a *App) DeleteConnectionProfile(id string) ConnectionProfilesResponse {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	var profiles []ConnectionProfile
 	data, err := os.ReadFile(a.profilesFilePath)
 	if err != nil {
@@ -1035,6 +1183,16 @@ func (a *App) DeleteConnectionProfile(id string) ConnectionProfilesResponse {
 			Message:  fmt.Sprintf("Error deleting profile: %v", err),
 		}
 	}
+
+	for i := range updated {
+		if updated[i].Password != "" {
+			decrypted, err := decryptPasswordDPAPI(updated[i].Password)
+			if err == nil {
+				updated[i].Password = decrypted
+			}
+		}
+	}
+
 	return ConnectionProfilesResponse{
 		Profiles: updated,
 		Message:  "Profile deleted",
