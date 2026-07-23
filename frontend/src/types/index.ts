@@ -2,6 +2,8 @@ import { main } from '../../wailsjs/go/models';
 
 export type TableSchemaColumn = main.TableSchemaColumn;
 export type ConnectionProfile = main.ConnectionProfile;
+export type RoutineParameter = main.RoutineParameter;
+export type FunctionInfo = main.FunctionInfo;
 
 export interface TableDetail {
   name: string;
@@ -11,14 +13,42 @@ export interface TableDetail {
   columns?: TableSchemaColumn[];
 }
 
+export interface RoutineDetail {
+  name: string;
+  expanded?: boolean;
+  loading?: boolean;
+  loaded?: boolean;
+  parameters?: RoutineParameter[];
+  routineType?: string;
+}
+
 export interface DatabaseNode {
   name: string;
   tables: string[];
   tableDetails?: { [tableName: string]: TableDetail };
   expanded: boolean;
   tablesFolderExpanded?: boolean;
+  tablesFilter?: string;
   loaded: boolean;
   loading: boolean;
+
+  // Programmability & Routines
+  programmabilityExpanded?: boolean;
+  proceduresFolderExpanded?: boolean;
+  proceduresLoaded?: boolean;
+  proceduresLoading?: boolean;
+  storedProcedures?: string[];
+  proceduresFilter?: string;
+  procedureDetails?: { [procName: string]: RoutineDetail };
+
+  functionsFolderExpanded?: boolean;
+  scalarFunctionsFolderExpanded?: boolean;
+  tableFunctionsFolderExpanded?: boolean;
+  functionsLoaded?: boolean;
+  functionsLoading?: boolean;
+  functions?: FunctionInfo[];
+  functionsFilter?: string;
+  functionDetails?: { [funcName: string]: RoutineDetail };
 }
 
 export interface ServerConnection {
@@ -54,6 +84,9 @@ export interface ContextMenuState {
   table: string;
   db: string;
   serverId?: string;
+  objectType?: 'table' | 'procedure' | 'function' | 'folder';
+  folderType?: 'tables' | 'procedures' | 'functions';
+  routineType?: string;
 }
 
 export interface QueryTab {

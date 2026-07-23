@@ -22,6 +22,14 @@ export function ExecuteQuery(arg1:string,arg2:string):Promise<main.ExecuteQueryR
 
 export function ExecuteQueryForServer(arg1:string,arg2:string,arg3:string):Promise<main.ExecuteQueryResponse>;
 
+export function GetRoutineDefinition(arg1:string,arg2:string):Promise<main.RoutineDefinitionResponse>;
+
+export function GetRoutineDefinitionForServer(arg1:string,arg2:string,arg3:string):Promise<main.RoutineDefinitionResponse>;
+
+export function GetRoutineParameters(arg1:string,arg2:string):Promise<main.RoutineParametersResponse>;
+
+export function GetRoutineParametersForServer(arg1:string,arg2:string,arg3:string):Promise<main.RoutineParametersResponse>;
+
 export function GetStatusInfo():Promise<main.StatusInfo>;
 
 export function GetTableSchema(arg1:string,arg2:string):Promise<main.TableSchemaResponse>;
@@ -33,6 +41,14 @@ export function ListConnectionProfiles():Promise<main.ConnectionProfilesResponse
 export function ListDatabases():Promise<main.DatabasesResponse>;
 
 export function ListDatabasesForServer(arg1:string):Promise<main.DatabasesResponse>;
+
+export function ListFunctions(arg1:string):Promise<main.FunctionsResponse>;
+
+export function ListFunctionsForServer(arg1:string,arg2:string):Promise<main.FunctionsResponse>;
+
+export function ListStoredProcedures(arg1:string):Promise<main.StoredProceduresResponse>;
+
+export function ListStoredProceduresForServer(arg1:string,arg2:string):Promise<main.StoredProceduresResponse>;
 
 export function ListTables(arg1:string):Promise<main.TablesResponse>;
 

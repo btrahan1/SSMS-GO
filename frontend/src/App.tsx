@@ -8,6 +8,10 @@ import {
   ListTablesForServer,
   GetTableSchemaForServer,
   ExecuteQueryForServer,
+  ListStoredProceduresForServer,
+  ListFunctionsForServer,
+  GetRoutineParametersForServer,
+  GetRoutineDefinitionForServer,
   ListConnectionProfiles,
   SaveConnectionProfile,
   DeleteConnectionProfile,
@@ -33,6 +37,7 @@ import QueryEditor from './components/QueryEditor';
 import DataGrid from './components/DataGrid';
 import ProfileModal from './components/ProfileModal';
 import ContextMenu from './components/ContextMenu';
+import FilterModal from './components/FilterModal';
 import { useQueryTabs } from './hooks/useQueryTabs';
 import { useGridEditing } from './hooks/useGridEditing';
 
@@ -457,6 +462,534 @@ function App() {
     }
   };
 
+  // --- Programmability, Stored Procedures & Functions Handlers ---
+  const toggleProgrammabilityFolder = (serverId: string, dbName: string) => {
+    setServers(prev => prev.map(s => {
+      if (s.id === serverId) {
+        const updatedDbs = s.databases.map(db => {
+          if (db.name === dbName) {
+            return { ...db, programmabilityExpanded: !(db.programmabilityExpanded ?? false) };
+          }
+          return db;
+        });
+        return { ...s, databases: updatedDbs };
+      }
+      return s;
+    }));
+  };
+
+  const toggleProceduresFolder = async (serverId: string, dbName: string) => {
+    const sIndex = servers.findIndex(s => s.id === serverId);
+    if (sIndex === -1) return;
+    const dbIndex = servers[sIndex].databases.findIndex(d => d.name === dbName);
+    if (dbIndex === -1) return;
+
+    const db = servers[sIndex].databases[dbIndex];
+    const isExpanding = !(db.proceduresFolderExpanded ?? false);
+
+    if (isExpanding && !db.proceduresLoaded && !db.proceduresLoading) {
+      setServers(prev => prev.map(s => {
+        if (s.id === serverId) {
+          const updatedDbs = [...s.databases];
+          updatedDbs[dbIndex] = { ...db, proceduresLoading: true };
+          return { ...s, databases: updatedDbs };
+        }
+        return s;
+      }));
+
+      try {
+        const res = await ListStoredProceduresForServer(serverId, dbName);
+        const procs = res.procedures || [];
+        setServers(prev => prev.map(s => {
+          if (s.id === serverId) {
+            const updatedDbs = [...s.databases];
+            updatedDbs[dbIndex] = {
+              ...db,
+              storedProcedures: procs,
+              proceduresFolderExpanded: true,
+              proceduresLoaded: true,
+              proceduresLoading: false,
+            };
+            return { ...s, databases: updatedDbs };
+          }
+          return s;
+        }));
+      } catch (err) {
+        console.error('Failed to load stored procedures:', err);
+        setServers(prev => prev.map(s => {
+          if (s.id === serverId) {
+            const updatedDbs = [...s.databases];
+            updatedDbs[dbIndex] = { ...db, proceduresLoading: false };
+            return { ...s, databases: updatedDbs };
+          }
+          return s;
+        }));
+      }
+    } else {
+      setServers(prev => prev.map(s => {
+        if (s.id === serverId) {
+          const updatedDbs = s.databases.map(d => d.name === dbName ? { ...d, proceduresFolderExpanded: isExpanding } : d);
+          return { ...s, databases: updatedDbs };
+        }
+        return s;
+      }));
+    }
+  };
+
+  const toggleProcedureNode = async (serverId: string, dbName: string, procName: string) => {
+    setCurrentDatabase(dbName);
+    const sIndex = servers.findIndex(s => s.id === serverId);
+    if (sIndex === -1) return;
+    const dbIndex = servers[sIndex].databases.findIndex(d => d.name === dbName);
+    if (dbIndex === -1) return;
+
+    const db = servers[sIndex].databases[dbIndex];
+    const details = db.procedureDetails || {};
+    const curDet = details[procName] || { name: procName };
+    const isExpanding = !(curDet.expanded ?? false);
+
+    if (isExpanding && !curDet.loaded && !curDet.loading) {
+      setServers(prev => prev.map(s => {
+        if (s.id === serverId) {
+          const updatedDbs = [...s.databases];
+          updatedDbs[dbIndex] = {
+            ...db,
+            procedureDetails: {
+              ...details,
+              [procName]: { ...curDet, loading: true }
+            }
+          };
+          return { ...s, databases: updatedDbs };
+        }
+        return s;
+      }));
+
+      try {
+        const res = await GetRoutineParametersForServer(serverId, dbName, procName);
+        const params = res.parameters || [];
+        setServers(prev => prev.map(s => {
+          if (s.id === serverId) {
+            const updatedDbs = [...s.databases];
+            updatedDbs[dbIndex] = {
+              ...db,
+              procedureDetails: {
+                ...details,
+                [procName]: { ...curDet, parameters: params, loaded: true, loading: false, expanded: true }
+              }
+            };
+            return { ...s, databases: updatedDbs };
+          }
+          return s;
+        }));
+      } catch (err) {
+        console.error('Failed to load procedure parameters:', err);
+        setServers(prev => prev.map(s => {
+          if (s.id === serverId) {
+            const updatedDbs = [...s.databases];
+            updatedDbs[dbIndex] = {
+              ...db,
+              procedureDetails: {
+                ...details,
+                [procName]: { ...curDet, loading: false }
+              }
+            };
+            return { ...s, databases: updatedDbs };
+          }
+          return s;
+        }));
+      }
+    } else {
+      setServers(prev => prev.map(s => {
+        if (s.id === serverId) {
+          const updatedDbs = s.databases.map(d => {
+            if (d.name === dbName) {
+              return {
+                ...d,
+                procedureDetails: {
+                  ...details,
+                  [procName]: { ...curDet, expanded: isExpanding }
+                }
+              };
+            }
+            return d;
+          });
+          return { ...s, databases: updatedDbs };
+        }
+        return s;
+      }));
+    }
+  };
+
+  const toggleFunctionsFolder = async (serverId: string, dbName: string) => {
+    const sIndex = servers.findIndex(s => s.id === serverId);
+    if (sIndex === -1) return;
+    const dbIndex = servers[sIndex].databases.findIndex(d => d.name === dbName);
+    if (dbIndex === -1) return;
+
+    const db = servers[sIndex].databases[dbIndex];
+    const isExpanding = !(db.functionsFolderExpanded ?? false);
+
+    if (isExpanding && !db.functionsLoaded && !db.functionsLoading) {
+      setServers(prev => prev.map(s => {
+        if (s.id === serverId) {
+          const updatedDbs = [...s.databases];
+          updatedDbs[dbIndex] = { ...db, functionsLoading: true };
+          return { ...s, databases: updatedDbs };
+        }
+        return s;
+      }));
+
+      try {
+        const res = await ListFunctionsForServer(serverId, dbName);
+        const funcs = res.functions || [];
+        setServers(prev => prev.map(s => {
+          if (s.id === serverId) {
+            const updatedDbs = [...s.databases];
+            updatedDbs[dbIndex] = {
+              ...db,
+              functions: funcs,
+              functionsFolderExpanded: true,
+              scalarFunctionsFolderExpanded: true,
+              tableFunctionsFolderExpanded: true,
+              functionsLoaded: true,
+              functionsLoading: false,
+            };
+            return { ...s, databases: updatedDbs };
+          }
+          return s;
+        }));
+      } catch (err) {
+        console.error('Failed to load functions:', err);
+        setServers(prev => prev.map(s => {
+          if (s.id === serverId) {
+            const updatedDbs = [...s.databases];
+            updatedDbs[dbIndex] = { ...db, functionsLoading: false };
+            return { ...s, databases: updatedDbs };
+          }
+          return s;
+        }));
+      }
+    } else {
+      setServers(prev => prev.map(s => {
+        if (s.id === serverId) {
+          const updatedDbs = s.databases.map(d => d.name === dbName ? { ...d, functionsFolderExpanded: isExpanding } : d);
+          return { ...s, databases: updatedDbs };
+        }
+        return s;
+      }));
+    }
+  };
+
+  const toggleScalarFunctionsFolder = (serverId: string, dbName: string) => {
+    setServers(prev => prev.map(s => {
+      if (s.id === serverId) {
+        const updatedDbs = s.databases.map(d => d.name === dbName ? { ...d, scalarFunctionsFolderExpanded: !(d.scalarFunctionsFolderExpanded ?? true) } : d);
+        return { ...s, databases: updatedDbs };
+      }
+      return s;
+    }));
+  };
+
+  const toggleTableFunctionsFolder = (serverId: string, dbName: string) => {
+    setServers(prev => prev.map(s => {
+      if (s.id === serverId) {
+        const updatedDbs = s.databases.map(d => d.name === dbName ? { ...d, tableFunctionsFolderExpanded: !(d.tableFunctionsFolderExpanded ?? true) } : d);
+        return { ...s, databases: updatedDbs };
+      }
+      return s;
+    }));
+  };
+
+  const toggleFunctionNode = async (serverId: string, dbName: string, funcName: string) => {
+    setCurrentDatabase(dbName);
+    const sIndex = servers.findIndex(s => s.id === serverId);
+    if (sIndex === -1) return;
+    const dbIndex = servers[sIndex].databases.findIndex(d => d.name === dbName);
+    if (dbIndex === -1) return;
+
+    const db = servers[sIndex].databases[dbIndex];
+    const details = db.functionDetails || {};
+    const curDet = details[funcName] || { name: funcName };
+    const isExpanding = !(curDet.expanded ?? false);
+
+    if (isExpanding && !curDet.loaded && !curDet.loading) {
+      setServers(prev => prev.map(s => {
+        if (s.id === serverId) {
+          const updatedDbs = [...s.databases];
+          updatedDbs[dbIndex] = {
+            ...db,
+            functionDetails: {
+              ...details,
+              [funcName]: { ...curDet, loading: true }
+            }
+          };
+          return { ...s, databases: updatedDbs };
+        }
+        return s;
+      }));
+
+      try {
+        const res = await GetRoutineParametersForServer(serverId, dbName, funcName);
+        const params = res.parameters || [];
+        setServers(prev => prev.map(s => {
+          if (s.id === serverId) {
+            const updatedDbs = [...s.databases];
+            updatedDbs[dbIndex] = {
+              ...db,
+              functionDetails: {
+                ...details,
+                [funcName]: { ...curDet, parameters: params, loaded: true, loading: false, expanded: true }
+              }
+            };
+            return { ...s, databases: updatedDbs };
+          }
+          return s;
+        }));
+      } catch (err) {
+        console.error('Failed to load function parameters:', err);
+        setServers(prev => prev.map(s => {
+          if (s.id === serverId) {
+            const updatedDbs = [...s.databases];
+            updatedDbs[dbIndex] = {
+              ...db,
+              functionDetails: {
+                ...details,
+                [funcName]: { ...curDet, loading: false }
+              }
+            };
+            return { ...s, databases: updatedDbs };
+          }
+          return s;
+        }));
+      }
+    } else {
+      setServers(prev => prev.map(s => {
+        if (s.id === serverId) {
+          const updatedDbs = s.databases.map(d => {
+            if (d.name === dbName) {
+              return {
+                ...d,
+                functionDetails: {
+                  ...details,
+                  [funcName]: { ...curDet, expanded: isExpanding }
+                }
+              };
+            }
+            return d;
+          });
+          return { ...s, databases: updatedDbs };
+        }
+        return s;
+      }));
+    }
+  };
+
+  const handleRoutineContextMenu = (
+    e: React.MouseEvent,
+    routineName: string,
+    dbName: string,
+    serverId: string,
+    objectType: 'procedure' | 'function',
+    routineType?: string
+  ) => {
+    e.preventDefault();
+    setCurrentDatabase(dbName);
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      table: routineName,
+      db: dbName,
+      serverId,
+      objectType,
+      routineType,
+    });
+  };
+
+  const handleScriptRoutineAsCreate = async () => {
+    if (!contextMenu) return;
+    const { table, db, serverId } = contextMenu;
+    const targetDb = db || currentDatabase;
+    setContextMenu(null);
+    setStatusMessage(`Fetching definition for ${table}...`);
+    try {
+      const res = await GetRoutineDefinitionForServer(serverId || '', targetDb, table);
+      if (res && res.definition) {
+        if (query.trim() === '') {
+          setQuery(res.definition);
+        } else {
+          handleAddTab();
+          setQuery(res.definition);
+        }
+        setStatusMessage(`Loaded definition for ${table}`);
+      } else {
+        setStatusMessage(`No definition found or returned for ${table}`);
+      }
+    } catch (err: any) {
+      setStatusMessage(`Failed to script definition: ${err}`);
+    }
+  };
+
+  const handleExecRoutineTemplate = async () => {
+    if (!contextMenu) return;
+    const { table, db, serverId, objectType, routineType } = contextMenu;
+    const targetDb = db || currentDatabase;
+    setContextMenu(null);
+    setStatusMessage(`Building execution template for ${table}...`);
+    try {
+      const res = await GetRoutineParametersForServer(serverId || '', targetDb, table);
+      const params = res.parameters || [];
+      let template = '';
+      if (objectType === 'procedure') {
+        template = `USE [${targetDb}];\nGO\n\nEXEC ${table}\n`;
+        const paramLines = params.map(p => `  ${p.parameterName} = NULL${p.isOutput ? ' OUTPUT' : ''}`);
+        template += paramLines.join(',\n') + ';\n';
+      } else if (routineType === 'Table-valued') {
+        const paramList = params.map(() => 'NULL').join(', ');
+        template = `USE [${targetDb}];\nGO\n\nSELECT * FROM ${table}(${paramList});\n`;
+      } else {
+        const paramList = params.map(() => 'NULL').join(', ');
+        template = `USE [${targetDb}];\nGO\n\nSELECT ${table}(${paramList}) AS Result;\n`;
+      }
+
+      if (query.trim() === '') {
+        setQuery(template);
+      } else {
+        handleAddTab();
+        setQuery(template);
+      }
+      setStatusMessage(`Generated execution template for ${table}`);
+    } catch (err: any) {
+      setStatusMessage(`Failed to build execution template: ${err}`);
+    }
+  };
+
+  // --- Folder Filter Handlers ---
+  const [showFilterModal, setShowFilterModal] = useState(false);
+  const [filterTarget, setFilterTarget] = useState<{
+    serverId: string;
+    dbName: string;
+    folderType: 'tables' | 'procedures' | 'functions';
+  } | null>(null);
+
+  const handleFolderContextMenu = (
+    e: React.MouseEvent,
+    serverId: string,
+    dbName: string,
+    folderType: 'tables' | 'procedures' | 'functions'
+  ) => {
+    e.preventDefault();
+    setCurrentDatabase(dbName);
+    const folderName = folderType === 'tables' ? 'Tables' : folderType === 'procedures' ? 'Stored Procedures' : 'Functions';
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      table: folderName,
+      db: dbName,
+      serverId,
+      objectType: 'folder',
+      folderType,
+    });
+  };
+
+  const handleOpenFilterModal = () => {
+    if (!contextMenu || !contextMenu.folderType) return;
+    const { serverId, db, folderType } = contextMenu;
+    setFilterTarget({
+      serverId: serverId || '',
+      dbName: db,
+      folderType: folderType as 'tables' | 'procedures' | 'functions',
+    });
+    setShowFilterModal(true);
+    setContextMenu(null);
+  };
+
+  const handleApplyFilter = (filterText: string) => {
+    if (!filterTarget) return;
+    const { serverId, dbName, folderType } = filterTarget;
+
+    setServers(prev => prev.map(s => {
+      if (s.id === serverId) {
+        const updatedDbs = s.databases.map(d => {
+          if (d.name === dbName) {
+            if (folderType === 'tables') {
+              return { ...d, tablesFilter: filterText };
+            } else if (folderType === 'procedures') {
+              return { ...d, proceduresFilter: filterText };
+            } else if (folderType === 'functions') {
+              return { ...d, functionsFilter: filterText };
+            }
+          }
+          return d;
+        });
+        return { ...s, databases: updatedDbs };
+      }
+      return s;
+    }));
+
+    setShowFilterModal(false);
+    setFilterTarget(null);
+  };
+
+  const handleClearFilter = () => {
+    let target = filterTarget;
+    if (!target && contextMenu && contextMenu.folderType) {
+      target = {
+        serverId: contextMenu.serverId || '',
+        dbName: contextMenu.db,
+        folderType: contextMenu.folderType as 'tables' | 'procedures' | 'functions',
+      };
+    }
+    if (!target) return;
+    const { serverId, dbName, folderType } = target;
+
+    setServers(prev => prev.map(s => {
+      if (s.id === serverId) {
+        const updatedDbs = s.databases.map(d => {
+          if (d.name === dbName) {
+            if (folderType === 'tables') {
+              return { ...d, tablesFilter: undefined };
+            } else if (folderType === 'procedures') {
+              return { ...d, proceduresFilter: undefined };
+            } else if (folderType === 'functions') {
+              return { ...d, functionsFilter: undefined };
+            }
+          }
+          return d;
+        });
+        return { ...s, databases: updatedDbs };
+      }
+      return s;
+    }));
+
+    setShowFilterModal(false);
+    setFilterTarget(null);
+    setContextMenu(null);
+  };
+
+  const getActiveFilterForContextMenu = () => {
+    if (!contextMenu || contextMenu.objectType !== 'folder' || !contextMenu.folderType) return false;
+    const { serverId, db, folderType } = contextMenu;
+    const server = servers.find(s => s.id === serverId);
+    const database = server?.databases.find(d => d.name === db);
+    if (!database) return false;
+    if (folderType === 'tables') return Boolean(database.tablesFilter);
+    if (folderType === 'procedures') return Boolean(database.proceduresFilter);
+    if (folderType === 'functions') return Boolean(database.functionsFilter);
+    return false;
+  };
+
+  const getInitialFilterForModal = () => {
+    if (!filterTarget) return '';
+    const { serverId, dbName, folderType } = filterTarget;
+    const server = servers.find(s => s.id === serverId);
+    const database = server?.databases.find(d => d.name === dbName);
+    if (!database) return '';
+    if (folderType === 'tables') return database.tablesFilter || '';
+    if (folderType === 'procedures') return database.proceduresFilter || '';
+    if (folderType === 'functions') return database.functionsFilter || '';
+    return '';
+  };
+
   // --- Query Execution ---
   const handleExecuteQuery = async () => {
     const activeTab = tabs.find(t => t.id === activeTabId);
@@ -791,7 +1324,16 @@ function App() {
           toggleDatabaseNode={toggleDatabaseNode}
           toggleTablesFolder={toggleTablesFolder}
           toggleTableNode={toggleTableNode}
+          toggleProgrammabilityFolder={toggleProgrammabilityFolder}
+          toggleProceduresFolder={toggleProceduresFolder}
+          toggleProcedureNode={toggleProcedureNode}
+          toggleFunctionsFolder={toggleFunctionsFolder}
+          toggleScalarFunctionsFolder={toggleScalarFunctionsFolder}
+          toggleTableFunctionsFolder={toggleTableFunctionsFolder}
+          toggleFunctionNode={toggleFunctionNode}
           handleTableContextMenu={handleTableContextMenu}
+          handleRoutineContextMenu={handleRoutineContextMenu}
+          handleFolderContextMenu={handleFolderContextMenu}
           handleMouseDown={handleMouseDown}
           leftPaneWidth={leftPaneWidth}
         />
@@ -850,12 +1392,31 @@ function App() {
           contextMenuRef={contextMenuRef}
           onSelectTop100={handleSelectTop100}
           onEditTop100={handleEditTop100}
+          onScriptAsCreate={handleScriptRoutineAsCreate}
+          onExecTemplate={handleExecRoutineTemplate}
+          onOpenFilterModal={handleOpenFilterModal}
+          onClearFilter={handleClearFilter}
+          hasActiveFilter={getActiveFilterForContextMenu()}
           onCopyTableName={() => {
             navigator.clipboard.writeText(contextMenu.table);
             setContextMenu(null);
           }}
         />
       )}
+
+      {/* Filter Dialog */}
+      <FilterModal
+        show={showFilterModal}
+        folderName={filterTarget ? (filterTarget.folderType === 'tables' ? 'Tables' : filterTarget.folderType === 'procedures' ? 'Stored Procedures' : 'Functions') : ''}
+        databaseName={filterTarget?.dbName || ''}
+        initialFilter={getInitialFilterForModal()}
+        onApply={handleApplyFilter}
+        onClear={handleClearFilter}
+        onClose={() => {
+          setShowFilterModal(false);
+          setFilterTarget(null);
+        }}
+      />
 
       {/* Profile Dialog */}
       {showProfileDialog && (

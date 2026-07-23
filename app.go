@@ -35,6 +35,40 @@ type TablesResponse struct {
 	Message string   `json:"message"`
 }
 
+type StoredProceduresResponse struct {
+	Procedures []string `json:"procedures"`
+	Message    string   `json:"message"`
+}
+
+type FunctionInfo struct {
+	Name        string `json:"name"`
+	RoutineType string `json:"routineType"`
+}
+
+type FunctionsResponse struct {
+	Functions []FunctionInfo `json:"functions"`
+	Message   string         `json:"message"`
+}
+
+type RoutineParameter struct {
+	ParameterName      string `json:"parameterName"`
+	DataType           string `json:"dataType"`
+	CharacterMaxLength *int64 `json:"characterMaxLength,omitempty"`
+	IsOutput           bool   `json:"isOutput"`
+	OrdinalPosition    int    `json:"ordinalPosition"`
+}
+
+type RoutineParametersResponse struct {
+	Parameters []RoutineParameter `json:"parameters"`
+	Message    string             `json:"message"`
+}
+
+type RoutineDefinitionResponse struct {
+	Definition  string `json:"definition"`
+	RoutineType string `json:"routineType"`
+	Message     string `json:"message"`
+}
+
 type TableSchemaColumn struct {
 	ColumnName         string `json:"ColumnName"`
 	DataType           string `json:"DataType"`
@@ -531,6 +565,221 @@ func (a *App) GetTableSchemaForServer(serverId string, databaseName, tableName s
 	return TableSchemaResponse{Schema: schema, Message: fmt.Sprintf("Successfully retrieved schema for table %s.", tableName)}
 }
 
+func (a *App) ListStoredProceduresForServer(serverId string, databaseName string) StoredProceduresResponse {
+	handle, err := a.getServerHandle(serverId)
+	if err != nil {
+		return StoredProceduresResponse{Procedures: []string{}, Message: err.Error()}
+	}
+
+	targetDb, err := a.getDbForDatabaseOnServer(handle, databaseName)
+	if err != nil {
+		return StoredProceduresResponse{Procedures: []string{}, Message: fmt.Sprintf("Error connecting to database %s: %v", databaseName, err)}
+	}
+
+	conn, err := targetDb.Conn(a.ctx)
+	if err != nil {
+		return StoredProceduresResponse{Procedures: []string{}, Message: fmt.Sprintf("Error getting connection: %v", err)}
+	}
+	defer conn.Close()
+
+	if databaseName != "" && targetDb == handle.DB {
+		_, _ = conn.ExecContext(a.ctx, fmt.Sprintf("USE [%s];", databaseName))
+	}
+
+	query := "SELECT ROUTINE_SCHEMA + '.' + ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'PROCEDURE' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME"
+	rows, err := conn.QueryContext(a.ctx, query)
+	if err != nil {
+		return StoredProceduresResponse{Procedures: []string{}, Message: fmt.Sprintf("Error listing stored procedures for database %s: %v", databaseName, err)}
+	}
+	defer rows.Close()
+
+	var procedures []string
+	for rows.Next() {
+		var procName string
+		if err := rows.Scan(&procName); err == nil {
+			procedures = append(procedures, procName)
+		}
+	}
+	if procedures == nil {
+		procedures = []string{}
+	}
+	return StoredProceduresResponse{Procedures: procedures, Message: fmt.Sprintf("Successfully retrieved stored procedures for database %s.", databaseName)}
+}
+
+func (a *App) ListFunctionsForServer(serverId string, databaseName string) FunctionsResponse {
+	handle, err := a.getServerHandle(serverId)
+	if err != nil {
+		return FunctionsResponse{Functions: []FunctionInfo{}, Message: err.Error()}
+	}
+
+	targetDb, err := a.getDbForDatabaseOnServer(handle, databaseName)
+	if err != nil {
+		return FunctionsResponse{Functions: []FunctionInfo{}, Message: fmt.Sprintf("Error connecting to database %s: %v", databaseName, err)}
+	}
+
+	conn, err := targetDb.Conn(a.ctx)
+	if err != nil {
+		return FunctionsResponse{Functions: []FunctionInfo{}, Message: fmt.Sprintf("Error getting connection: %v", err)}
+	}
+	defer conn.Close()
+
+	if databaseName != "" && targetDb == handle.DB {
+		_, _ = conn.ExecContext(a.ctx, fmt.Sprintf("USE [%s];", databaseName))
+	}
+
+	query := `
+		SELECT 
+			r.ROUTINE_SCHEMA + '.' + r.ROUTINE_NAME AS RoutineName,
+			CASE 
+				WHEN o.type IN ('IF', 'TF', 'FT') THEN 'Table-valued'
+				ELSE 'Scalar'
+			END AS RoutineType
+		FROM INFORMATION_SCHEMA.ROUTINES r
+		LEFT JOIN sys.objects o ON OBJECT_ID(QUOTENAME(r.ROUTINE_SCHEMA) + '.' + QUOTENAME(r.ROUTINE_NAME)) = o.object_id
+		WHERE r.ROUTINE_TYPE = 'FUNCTION'
+		ORDER BY r.ROUTINE_SCHEMA, r.ROUTINE_NAME
+	`
+	rows, err := conn.QueryContext(a.ctx, query)
+	if err != nil {
+		return FunctionsResponse{Functions: []FunctionInfo{}, Message: fmt.Sprintf("Error listing functions for database %s: %v", databaseName, err)}
+	}
+	defer rows.Close()
+
+	var functions []FunctionInfo
+	for rows.Next() {
+		var name, routineType string
+		if err := rows.Scan(&name, &routineType); err == nil {
+			functions = append(functions, FunctionInfo{Name: name, RoutineType: routineType})
+		}
+	}
+	if functions == nil {
+		functions = []FunctionInfo{}
+	}
+	return FunctionsResponse{Functions: functions, Message: fmt.Sprintf("Successfully retrieved functions for database %s.", databaseName)}
+}
+
+func (a *App) GetRoutineParametersForServer(serverId string, databaseName, routineName string) RoutineParametersResponse {
+	handle, err := a.getServerHandle(serverId)
+	if err != nil {
+		return RoutineParametersResponse{Parameters: []RoutineParameter{}, Message: err.Error()}
+	}
+
+	targetDb, err := a.getDbForDatabaseOnServer(handle, databaseName)
+	if err != nil {
+		return RoutineParametersResponse{Parameters: []RoutineParameter{}, Message: fmt.Sprintf("Error connecting to database %s: %v", databaseName, err)}
+	}
+
+	schemaParts := splitTableName(routineName)
+	if len(schemaParts) != 2 {
+		return RoutineParametersResponse{Parameters: []RoutineParameter{}, Message: "Invalid routine name format. Expected 'schema.routine'."}
+	}
+	rSchema := schemaParts[0]
+	rName := schemaParts[1]
+
+	conn, err := targetDb.Conn(a.ctx)
+	if err != nil {
+		return RoutineParametersResponse{Parameters: []RoutineParameter{}, Message: fmt.Sprintf("Error getting connection: %v", err)}
+	}
+	defer conn.Close()
+
+	if databaseName != "" && targetDb == handle.DB {
+		_, _ = conn.ExecContext(a.ctx, fmt.Sprintf("USE [%s];", databaseName))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT 
+			p.PARAMETER_NAME,
+			p.DATA_TYPE,
+			p.CHARACTER_MAXIMUM_LENGTH,
+			CASE WHEN p.PARAMETER_MODE LIKE '%%OUT%%' THEN 1 ELSE 0 END AS IsOutput,
+			p.ORDINAL_POSITION
+		FROM INFORMATION_SCHEMA.PARAMETERS p
+		WHERE p.SPECIFIC_SCHEMA = '%[1]s' AND p.SPECIFIC_NAME = '%[2]s' AND p.PARAMETER_NAME <> ''
+		ORDER BY p.ORDINAL_POSITION;
+	`, rSchema, rName)
+
+	rows, err := conn.QueryContext(a.ctx, query)
+	if err != nil {
+		return RoutineParametersResponse{Parameters: []RoutineParameter{}, Message: fmt.Sprintf("Error getting parameters: %v", err)}
+	}
+	defer rows.Close()
+
+	var parameters []RoutineParameter
+	for rows.Next() {
+		var paramName, dataType string
+		var charMaxLength sql.NullInt64
+		var isOutput bool
+		var ordinalPos int
+
+		if err := rows.Scan(&paramName, &dataType, &charMaxLength, &isOutput, &ordinalPos); err == nil {
+			param := RoutineParameter{
+				ParameterName:   paramName,
+				DataType:        dataType,
+				IsOutput:        isOutput,
+				OrdinalPosition: ordinalPos,
+			}
+			if charMaxLength.Valid {
+				param.CharacterMaxLength = &charMaxLength.Int64
+			}
+			parameters = append(parameters, param)
+		}
+	}
+	if parameters == nil {
+		parameters = []RoutineParameter{}
+	}
+	return RoutineParametersResponse{Parameters: parameters, Message: fmt.Sprintf("Successfully retrieved parameters for %s.", routineName)}
+}
+
+func (a *App) GetRoutineDefinitionForServer(serverId string, databaseName, routineName string) RoutineDefinitionResponse {
+	handle, err := a.getServerHandle(serverId)
+	if err != nil {
+		return RoutineDefinitionResponse{Definition: "", Message: err.Error()}
+	}
+
+	targetDb, err := a.getDbForDatabaseOnServer(handle, databaseName)
+	if err != nil {
+		return RoutineDefinitionResponse{Definition: "", Message: fmt.Sprintf("Error connecting to database %s: %v", databaseName, err)}
+	}
+
+	schemaParts := splitTableName(routineName)
+	if len(schemaParts) != 2 {
+		return RoutineDefinitionResponse{Definition: "", Message: "Invalid routine name format. Expected 'schema.routine'."}
+	}
+	rSchema := schemaParts[0]
+	rName := schemaParts[1]
+
+	conn, err := targetDb.Conn(a.ctx)
+	if err != nil {
+		return RoutineDefinitionResponse{Definition: "", Message: fmt.Sprintf("Error getting connection: %v", err)}
+	}
+	defer conn.Close()
+
+	if databaseName != "" && targetDb == handle.DB {
+		_, _ = conn.ExecContext(a.ctx, fmt.Sprintf("USE [%s];", databaseName))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT 
+			COALESCE(OBJECT_DEFINITION(OBJECT_ID(QUOTENAME('%[1]s') + '.' + QUOTENAME('%[2]s'))), m.definition, '') AS Definition,
+			o.type_desc AS RoutineType
+		FROM sys.objects o
+		LEFT JOIN sys.sql_modules m ON o.object_id = m.object_id
+		WHERE o.object_id = OBJECT_ID(QUOTENAME('%[1]s') + '.' + QUOTENAME('%[2]s'))
+	`, rSchema, rName)
+
+	var definition, routineType string
+	err = conn.QueryRowContext(a.ctx, query).Scan(&definition, &routineType)
+	if err != nil {
+		return RoutineDefinitionResponse{Definition: "", Message: fmt.Sprintf("Error fetching definition for %s: %v", routineName, err)}
+	}
+
+	return RoutineDefinitionResponse{
+		Definition:  definition,
+		RoutineType: routineType,
+		Message:     fmt.Sprintf("Successfully retrieved definition for %s.", routineName),
+	}
+}
+
 func (a *App) ExecuteQueryForServer(serverId string, databaseName, query string) ExecuteQueryResponse {
 	handle, err := a.getServerHandle(serverId)
 	if err != nil {
@@ -635,6 +884,22 @@ func (a *App) ListTables(databaseName string) TablesResponse {
 
 func (a *App) GetTableSchema(databaseName, tableName string) TableSchemaResponse {
 	return a.GetTableSchemaForServer("", databaseName, tableName)
+}
+
+func (a *App) ListStoredProcedures(databaseName string) StoredProceduresResponse {
+	return a.ListStoredProceduresForServer("", databaseName)
+}
+
+func (a *App) ListFunctions(databaseName string) FunctionsResponse {
+	return a.ListFunctionsForServer("", databaseName)
+}
+
+func (a *App) GetRoutineParameters(databaseName, routineName string) RoutineParametersResponse {
+	return a.GetRoutineParametersForServer("", databaseName, routineName)
+}
+
+func (a *App) GetRoutineDefinition(databaseName, routineName string) RoutineDefinitionResponse {
+	return a.GetRoutineDefinitionForServer("", databaseName, routineName)
 }
 
 func (a *App) ExecuteQuery(databaseName, query string) ExecuteQueryResponse {

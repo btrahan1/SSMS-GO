@@ -42,6 +42,22 @@ export function ExecuteQueryForServer(arg1, arg2, arg3) {
   return window['go']['main']['App']['ExecuteQueryForServer'](arg1, arg2, arg3);
 }
 
+export function GetRoutineDefinition(arg1, arg2) {
+  return window['go']['main']['App']['GetRoutineDefinition'](arg1, arg2);
+}
+
+export function GetRoutineDefinitionForServer(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetRoutineDefinitionForServer'](arg1, arg2, arg3);
+}
+
+export function GetRoutineParameters(arg1, arg2) {
+  return window['go']['main']['App']['GetRoutineParameters'](arg1, arg2);
+}
+
+export function GetRoutineParametersForServer(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetRoutineParametersForServer'](arg1, arg2, arg3);
+}
+
 export function GetStatusInfo() {
   return window['go']['main']['App']['GetStatusInfo']();
 }
@@ -64,6 +80,22 @@ export function ListDatabases() {
 
 export function ListDatabasesForServer(arg1) {
   return window['go']['main']['App']['ListDatabasesForServer'](arg1);
+}
+
+export function ListFunctions(arg1) {
+  return window['go']['main']['App']['ListFunctions'](arg1);
+}
+
+export function ListFunctionsForServer(arg1, arg2) {
+  return window['go']['main']['App']['ListFunctionsForServer'](arg1, arg2);
+}
+
+export function ListStoredProcedures(arg1) {
+  return window['go']['main']['App']['ListStoredProcedures'](arg1);
+}
+
+export function ListStoredProceduresForServer(arg1, arg2) {
+  return window['go']['main']['App']['ListStoredProceduresForServer'](arg1, arg2);
 }
 
 export function ListTables(arg1) {
