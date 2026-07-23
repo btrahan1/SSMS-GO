@@ -32,6 +32,10 @@ export function GetRoutineParametersForServer(arg1:string,arg2:string,arg3:strin
 
 export function GetStatusInfo():Promise<main.StatusInfo>;
 
+export function GetTableDefinition(arg1:string,arg2:string):Promise<main.TableDefinitionResponse>;
+
+export function GetTableDefinitionForServer(arg1:string,arg2:string,arg3:string):Promise<main.TableDefinitionResponse>;
+
 export function GetTableSchema(arg1:string,arg2:string):Promise<main.TableSchemaResponse>;
 
 export function GetTableSchemaForServer(arg1:string,arg2:string,arg3:string):Promise<main.TableSchemaResponse>;

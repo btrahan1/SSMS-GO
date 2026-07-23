@@ -270,6 +270,21 @@ export namespace main {
 	        this.message = source["message"];
 	    }
 	}
+	export class TableDefinitionResponse {
+	    definition: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TableDefinitionResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.definition = source["definition"];
+	        this.message = source["message"];
+	    }
+	}
+
 	export class TableSchemaColumn {
 	    ColumnName: string;
 	    DataType: string;

@@ -12,6 +12,7 @@ import {
   ListFunctionsForServer,
   GetRoutineParametersForServer,
   GetRoutineDefinitionForServer,
+  GetTableDefinitionForServer,
   ListConnectionProfiles,
   SaveConnectionProfile,
   DeleteConnectionProfile,
@@ -829,6 +830,30 @@ function App() {
     }
   };
 
+  const handleScriptTableAsCreate = async () => {
+    if (!contextMenu) return;
+    const { table, db, serverId } = contextMenu;
+    const targetDb = db || currentDatabase;
+    setContextMenu(null);
+    setStatusMessage(`Generating CREATE TABLE script for ${table}...`);
+    try {
+      const res = await GetTableDefinitionForServer(serverId || '', targetDb, table);
+      if (res && res.definition) {
+        if (query.trim() === '') {
+          setQuery(res.definition);
+        } else {
+          handleAddTab();
+          setQuery(res.definition);
+        }
+        setStatusMessage(`Generated CREATE TABLE script for ${table}`);
+      } else {
+        setStatusMessage(`Could not generate script for ${table}`);
+      }
+    } catch (err: any) {
+      setStatusMessage(`Failed to generate CREATE TABLE script: ${err}`);
+    }
+  };
+
   const handleExecRoutineTemplate = async () => {
     if (!contextMenu) return;
     const { table, db, serverId, objectType, routineType } = contextMenu;
@@ -1392,6 +1417,7 @@ function App() {
           contextMenuRef={contextMenuRef}
           onSelectTop100={handleSelectTop100}
           onEditTop100={handleEditTop100}
+          onScriptTableAsCreate={handleScriptTableAsCreate}
           onScriptAsCreate={handleScriptRoutineAsCreate}
           onExecTemplate={handleExecRoutineTemplate}
           onOpenFilterModal={handleOpenFilterModal}

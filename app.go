@@ -83,6 +83,11 @@ type TableSchemaResponse struct {
 	Message string              `json:"message"`
 }
 
+type TableDefinitionResponse struct {
+	Definition string `json:"definition"`
+	Message    string `json:"message"`
+}
+
 type QueryResultRow map[string]interface{}
 
 type ExecuteQueryResponse struct {
@@ -530,6 +535,68 @@ func (a *App) GetTableSchemaForServer(serverId string, databaseName, tableName s
 		schema = []TableSchemaColumn{}
 	}
 	return TableSchemaResponse{Schema: schema, Message: fmt.Sprintf("Successfully retrieved schema for table %s.", tableName)}
+}
+
+func (a *App) GetTableDefinitionForServer(serverId string, databaseName, tableName string) TableDefinitionResponse {
+	schemaRes := a.GetTableSchemaForServer(serverId, databaseName, tableName)
+	if len(schemaRes.Schema) == 0 {
+		return TableDefinitionResponse{Definition: "", Message: fmt.Sprintf("Could not retrieve schema for table %s", tableName)}
+	}
+
+	parts := splitTableName(tableName)
+	tableSchema := parts[0]
+	actualTableName := parts[1]
+
+	var colDefs []string
+	var pkCols []string
+
+	for _, col := range schemaRes.Schema {
+		var colDef strings.Builder
+		colDef.WriteString(fmt.Sprintf("    [%s] %s", col.ColumnName, strings.ToUpper(col.DataType)))
+
+		dType := strings.ToLower(col.DataType)
+		if col.CharacterMaxLength != nil && (dType == "varchar" || dType == "nvarchar" || dType == "char" || dType == "nchar" || dType == "binary" || dType == "varbinary") {
+			if *col.CharacterMaxLength == -1 {
+				colDef.WriteString("(MAX)")
+			} else {
+				colDef.WriteString(fmt.Sprintf("(%d)", *col.CharacterMaxLength))
+			}
+		}
+
+		if col.IsIdentity {
+			colDef.WriteString(" IDENTITY(1,1)")
+		}
+
+		if strings.ToUpper(col.IsNullable) == "NO" {
+			colDef.WriteString(" NOT NULL")
+		} else {
+			colDef.WriteString(" NULL")
+		}
+
+		colDefs = append(colDefs, colDef.String())
+
+		if col.IsPrimaryKey {
+			pkCols = append(pkCols, fmt.Sprintf("[%s] ASC", col.ColumnName))
+		}
+	}
+
+	if len(pkCols) > 0 {
+		pkConstraint := fmt.Sprintf("    CONSTRAINT [PK_%s] PRIMARY KEY CLUSTERED (%s)", actualTableName, strings.Join(pkCols, ", "))
+		colDefs = append(colDefs, pkConstraint)
+	}
+
+	var sb strings.Builder
+	if databaseName != "" {
+		sb.WriteString(fmt.Sprintf("USE [%s];\nGO\n\n", databaseName))
+	}
+	sb.WriteString(fmt.Sprintf("CREATE TABLE [%s].[%s] (\n", tableSchema, actualTableName))
+	sb.WriteString(strings.Join(colDefs, ",\n"))
+	sb.WriteString("\n);\nGO\n")
+
+	return TableDefinitionResponse{
+		Definition: sb.String(),
+		Message:    fmt.Sprintf("Successfully generated CREATE TABLE definition for %s.", tableName),
+	}
 }
 
 func (a *App) ListStoredProceduresForServer(serverId string, databaseName string) StoredProceduresResponse {

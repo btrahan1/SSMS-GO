@@ -7,6 +7,7 @@ interface ContextMenuProps {
   onSelectTop100: () => void;
   onEditTop100: () => void;
   onCopyTableName: () => void;
+  onScriptTableAsCreate?: () => void;
   onScriptAsCreate?: () => void;
   onExecTemplate?: () => void;
   onOpenFilterModal?: () => void;
@@ -20,6 +21,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onSelectTop100,
   onEditTop100,
   onCopyTableName,
+  onScriptTableAsCreate,
   onScriptAsCreate,
   onExecTemplate,
   onOpenFilterModal,
@@ -75,6 +77,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           <div className="context-menu-item" onClick={onEditTop100}>
             ✏️ Edit Top 100 Rows
           </div>
+          {onScriptTableAsCreate && (
+            <div className="context-menu-item" onClick={onScriptTableAsCreate}>
+              📜 Script Table as CREATE
+            </div>
+          )}
           <div className="context-menu-separator" />
           <div className="context-menu-item" onClick={onCopyTableName}>
             📝 Copy Table Name
