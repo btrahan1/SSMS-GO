@@ -569,8 +569,8 @@ func (a *App) GetTableSchemaForServer(serverId string, databaseName, tableName s
 	if len(schemaParts) != 2 {
 		return TableSchemaResponse{Schema: []TableSchemaColumn{}, Message: "Invalid table name format. Expected 'schema.table'."}
 	}
-	tableSchema := schemaParts[0]
-	actualTableName := schemaParts[1]
+	tableSchema := strings.ReplaceAll(schemaParts[0], "'", "''")
+	actualTableName := strings.ReplaceAll(schemaParts[1], "'", "''")
 
 	conn, err := targetDb.Conn(a.ctx)
 	if err != nil {
@@ -582,7 +582,7 @@ func (a *App) GetTableSchemaForServer(serverId string, databaseName, tableName s
 		_, _ = conn.ExecContext(a.ctx, fmt.Sprintf("USE [%s];", databaseName))
 	}
 
-	query := `
+	query := fmt.Sprintf(`
 		SELECT
 			c.COLUMN_NAME,
 			c.DATA_TYPE,
@@ -611,12 +611,12 @@ func (a *App) GetTableSchemaForServer(serverId string, databaseName, tableName s
 			AND c.TABLE_SCHEMA = pk.TABLE_SCHEMA
 			AND c.TABLE_NAME = pk.TABLE_NAME
 		WHERE
-			c.TABLE_NAME = @tableName AND c.TABLE_SCHEMA = @tableSchema
+			c.TABLE_NAME = '%[1]s' AND c.TABLE_SCHEMA = '%[2]s'
 		ORDER BY
 			c.ORDINAL_POSITION;
-	`
+	`, actualTableName, tableSchema)
 
-	rows, err := conn.QueryContext(a.ctx, query, sql.Named("tableName", actualTableName), sql.Named("tableSchema", tableSchema))
+	rows, err := conn.QueryContext(a.ctx, query)
 	if err != nil {
 		return TableSchemaResponse{Schema: []TableSchemaColumn{}, Message: fmt.Sprintf("Error getting schema: %v", err)}
 	}
@@ -818,8 +818,8 @@ func (a *App) GetRoutineParametersForServer(serverId string, databaseName, routi
 	if len(schemaParts) != 2 {
 		return RoutineParametersResponse{Parameters: []RoutineParameter{}, Message: "Invalid routine name format. Expected 'schema.routine'."}
 	}
-	rSchema := schemaParts[0]
-	rName := schemaParts[1]
+	rSchema := strings.ReplaceAll(schemaParts[0], "'", "''")
+	rName := strings.ReplaceAll(schemaParts[1], "'", "''")
 
 	conn, err := targetDb.Conn(a.ctx)
 	if err != nil {
@@ -831,19 +831,19 @@ func (a *App) GetRoutineParametersForServer(serverId string, databaseName, routi
 		_, _ = conn.ExecContext(a.ctx, fmt.Sprintf("USE [%s];", databaseName))
 	}
 
-	query := `
+	query := fmt.Sprintf(`
 		SELECT 
 			p.PARAMETER_NAME,
 			p.DATA_TYPE,
 			p.CHARACTER_MAXIMUM_LENGTH,
-			CASE WHEN p.PARAMETER_MODE LIKE '%OUT%' THEN 1 ELSE 0 END AS IsOutput,
+			CASE WHEN p.PARAMETER_MODE LIKE '%%OUT%%' THEN 1 ELSE 0 END AS IsOutput,
 			p.ORDINAL_POSITION
 		FROM INFORMATION_SCHEMA.PARAMETERS p
-		WHERE p.SPECIFIC_SCHEMA = @routineSchema AND p.SPECIFIC_NAME = @routineName AND p.PARAMETER_NAME <> ''
+		WHERE p.SPECIFIC_SCHEMA = '%[1]s' AND p.SPECIFIC_NAME = '%[2]s' AND p.PARAMETER_NAME <> ''
 		ORDER BY p.ORDINAL_POSITION;
-	`
+	`, rSchema, rName)
 
-	rows, err := conn.QueryContext(a.ctx, query, sql.Named("routineSchema", rSchema), sql.Named("routineName", rName))
+	rows, err := conn.QueryContext(a.ctx, query)
 	if err != nil {
 		return RoutineParametersResponse{Parameters: []RoutineParameter{}, Message: fmt.Sprintf("Error getting parameters: %v", err)}
 	}
@@ -890,8 +890,8 @@ func (a *App) GetRoutineDefinitionForServer(serverId string, databaseName, routi
 	if len(schemaParts) != 2 {
 		return RoutineDefinitionResponse{Definition: "", Message: "Invalid routine name format. Expected 'schema.routine'."}
 	}
-	rSchema := schemaParts[0]
-	rName := schemaParts[1]
+	rSchema := strings.ReplaceAll(schemaParts[0], "'", "''")
+	rName := strings.ReplaceAll(schemaParts[1], "'", "''")
 
 	conn, err := targetDb.Conn(a.ctx)
 	if err != nil {
@@ -903,17 +903,17 @@ func (a *App) GetRoutineDefinitionForServer(serverId string, databaseName, routi
 		_, _ = conn.ExecContext(a.ctx, fmt.Sprintf("USE [%s];", databaseName))
 	}
 
-	query := `
+	query := fmt.Sprintf(`
 		SELECT 
-			COALESCE(OBJECT_DEFINITION(OBJECT_ID(QUOTENAME(@routineSchema) + '.' + QUOTENAME(@routineName))), m.definition, '') AS Definition,
+			COALESCE(OBJECT_DEFINITION(OBJECT_ID(QUOTENAME('%[1]s') + '.' + QUOTENAME('%[2]s'))), m.definition, '') AS Definition,
 			o.type_desc AS RoutineType
 		FROM sys.objects o
 		LEFT JOIN sys.sql_modules m ON o.object_id = m.object_id
-		WHERE o.object_id = OBJECT_ID(QUOTENAME(@routineSchema) + '.' + QUOTENAME(@routineName))
-	`
+		WHERE o.object_id = OBJECT_ID(QUOTENAME('%[1]s') + '.' + QUOTENAME('%[2]s'))
+	`, rSchema, rName)
 
 	var definition, routineType string
-	err = conn.QueryRowContext(a.ctx, query, sql.Named("routineSchema", rSchema), sql.Named("routineName", rName)).Scan(&definition, &routineType)
+	err = conn.QueryRowContext(a.ctx, query).Scan(&definition, &routineType)
 	if err != nil {
 		return RoutineDefinitionResponse{Definition: "", Message: fmt.Sprintf("Error fetching definition for %s: %v", routineName, err)}
 	}
