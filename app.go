@@ -1262,18 +1262,19 @@ func (a *App) saveProfiles(profiles []ConnectionProfile) error {
 }
 
 func splitTableName(tableName string) []string {
-	parts := []string{"dbo", tableName}
+	cleanName := strings.ReplaceAll(strings.ReplaceAll(tableName, "[", ""), "]", "")
+	parts := []string{"dbo", cleanName}
 	dotIndex := -1
-	for i := len(tableName) - 1; i >= 0; i-- {
-		if tableName[i] == '.' {
+	for i := len(cleanName) - 1; i >= 0; i-- {
+		if cleanName[i] == '.' {
 			dotIndex = i
 			break
 		}
 	}
 
 	if dotIndex != -1 {
-		parts[0] = tableName[:dotIndex]
-		parts[1] = tableName[dotIndex+1:]
+		parts[0] = cleanName[:dotIndex]
+		parts[1] = cleanName[dotIndex+1:]
 	}
 	return parts
 }
