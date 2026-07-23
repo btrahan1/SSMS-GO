@@ -611,12 +611,12 @@ func (a *App) GetTableSchemaForServer(serverId string, databaseName, tableName s
 			AND c.TABLE_SCHEMA = pk.TABLE_SCHEMA
 			AND c.TABLE_NAME = pk.TABLE_NAME
 		WHERE
-			c.TABLE_NAME = @p1 AND c.TABLE_SCHEMA = @p2
+			c.TABLE_NAME = @tableName AND c.TABLE_SCHEMA = @tableSchema
 		ORDER BY
 			c.ORDINAL_POSITION;
 	`
 
-	rows, err := conn.QueryContext(a.ctx, query, actualTableName, tableSchema)
+	rows, err := conn.QueryContext(a.ctx, query, sql.Named("tableName", actualTableName), sql.Named("tableSchema", tableSchema))
 	if err != nil {
 		return TableSchemaResponse{Schema: []TableSchemaColumn{}, Message: fmt.Sprintf("Error getting schema: %v", err)}
 	}
@@ -839,11 +839,11 @@ func (a *App) GetRoutineParametersForServer(serverId string, databaseName, routi
 			CASE WHEN p.PARAMETER_MODE LIKE '%OUT%' THEN 1 ELSE 0 END AS IsOutput,
 			p.ORDINAL_POSITION
 		FROM INFORMATION_SCHEMA.PARAMETERS p
-		WHERE p.SPECIFIC_SCHEMA = @p1 AND p.SPECIFIC_NAME = @p2 AND p.PARAMETER_NAME <> ''
+		WHERE p.SPECIFIC_SCHEMA = @routineSchema AND p.SPECIFIC_NAME = @routineName AND p.PARAMETER_NAME <> ''
 		ORDER BY p.ORDINAL_POSITION;
 	`
 
-	rows, err := conn.QueryContext(a.ctx, query, rSchema, rName)
+	rows, err := conn.QueryContext(a.ctx, query, sql.Named("routineSchema", rSchema), sql.Named("routineName", rName))
 	if err != nil {
 		return RoutineParametersResponse{Parameters: []RoutineParameter{}, Message: fmt.Sprintf("Error getting parameters: %v", err)}
 	}
@@ -905,15 +905,15 @@ func (a *App) GetRoutineDefinitionForServer(serverId string, databaseName, routi
 
 	query := `
 		SELECT 
-			COALESCE(OBJECT_DEFINITION(OBJECT_ID(QUOTENAME(@p1) + '.' + QUOTENAME(@p2))), m.definition, '') AS Definition,
+			COALESCE(OBJECT_DEFINITION(OBJECT_ID(QUOTENAME(@routineSchema) + '.' + QUOTENAME(@routineName))), m.definition, '') AS Definition,
 			o.type_desc AS RoutineType
 		FROM sys.objects o
 		LEFT JOIN sys.sql_modules m ON o.object_id = m.object_id
-		WHERE o.object_id = OBJECT_ID(QUOTENAME(@p1) + '.' + QUOTENAME(@p2))
+		WHERE o.object_id = OBJECT_ID(QUOTENAME(@routineSchema) + '.' + QUOTENAME(@routineName))
 	`
 
 	var definition, routineType string
-	err = conn.QueryRowContext(a.ctx, query, rSchema, rName).Scan(&definition, &routineType)
+	err = conn.QueryRowContext(a.ctx, query, sql.Named("routineSchema", rSchema), sql.Named("routineName", rName)).Scan(&definition, &routineType)
 	if err != nil {
 		return RoutineDefinitionResponse{Definition: "", Message: fmt.Sprintf("Error fetching definition for %s: %v", routineName, err)}
 	}
