@@ -124,6 +124,7 @@ type ServerConnectionHandle struct {
 	RawConnStr string
 	DB         *sql.DB
 	DBMap      map[string]*sql.DB
+	DisableUse bool
 }
 
 type App struct {
@@ -165,71 +166,15 @@ func (a *App) GetStatusInfo() StatusInfo {
 }
 
 func (a *App) buildConnStrForDatabase(dbName string) string {
-	if a.rawConnStr == "" || dbName == "" {
-		return a.rawConnStr
-	}
-
-	parts := strings.Split(a.rawConnStr, ";")
-	var newParts []string
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if trimmed == "" {
-			continue
-		}
-		if strings.HasPrefix(strings.ToLower(trimmed), "database=") {
-			continue
-		}
-		newParts = append(newParts, trimmed)
-	}
-	newParts = append(newParts, fmt.Sprintf("database=%s", dbName))
-	return strings.Join(newParts, ";")
+	return a.buildConnStrWithRaw(a.rawConnStr, dbName)
 }
 
 func (a *App) getDbForDatabase(databaseName string) (*sql.DB, error) {
-	if a.db == nil {
-		return nil, fmt.Errorf("Not connected to a SQL Server.")
-	}
-
-	if databaseName == "" {
-		return a.db, nil
-	}
-
-	if a.dbMap != nil {
-		if targetDb, exists := a.dbMap[databaseName]; exists && targetDb != nil {
-			return targetDb, nil
-		}
-	}
-
-	// 1. Test if USE [databaseName] works on primary pool (standard SQL Server / Express)
-	conn, err := a.db.Conn(a.ctx)
-	if err == nil {
-		_, useErr := conn.ExecContext(a.ctx, fmt.Sprintf("USE [%s];", databaseName))
-		conn.Close()
-		if useErr == nil {
-			return a.db, nil
-		}
-	}
-
-	// 2. USE failed (Azure SQL Database!). Open dedicated connection pool for databaseName
-	log.Printf("Azure SQL Database detected. Creating dedicated connection pool for database [%s]...", databaseName)
-
-	targetConnStr := a.buildConnStrForDatabase(databaseName)
-	targetDb, err := sql.Open("mssql", targetConnStr)
+	handle, err := a.getServerHandle("")
 	if err != nil {
-		return nil, fmt.Errorf("Error opening connection for database %s: %v", databaseName, err)
+		return nil, err
 	}
-
-	err = targetDb.PingContext(a.ctx)
-	if err != nil {
-		targetDb.Close()
-		return nil, fmt.Errorf("Error pinging database %s: %v", databaseName, err)
-	}
-
-	if a.dbMap == nil {
-		a.dbMap = make(map[string]*sql.DB)
-	}
-	a.dbMap[databaseName] = targetDb
-	return targetDb, nil
+	return a.getDbForDatabaseOnServer(handle, databaseName)
 }
 
 func (a *App) ConnectServerWithId(id string, connStr string, serverName string, dbName string) ConnectionResponse {
@@ -357,17 +302,31 @@ func (a *App) getDbForDatabaseOnServer(handle *ServerConnectionHandle, databaseN
 		}
 	}
 
-	// 1. Test USE [databaseName] on primary pool
-	conn, err := handle.DB.Conn(a.ctx)
-	if err == nil {
-		_, useErr := conn.ExecContext(a.ctx, fmt.Sprintf("USE [%s];", databaseName))
-		conn.Close()
-		if useErr == nil {
-			return handle.DB, nil
+	isAzureDomain := strings.Contains(strings.ToLower(handle.ServerName), ".database.windows.net") ||
+		strings.Contains(strings.ToLower(handle.RawConnStr), ".database.windows.net")
+
+	if !handle.DisableUse && !isAzureDomain {
+		ctx, cancel := context.WithTimeout(a.ctx, 2*time.Second)
+		conn, err := handle.DB.Conn(ctx)
+		if err == nil {
+			_, useErr := conn.ExecContext(ctx, fmt.Sprintf("USE [%s];", databaseName))
+			conn.Close()
+			cancel()
+			if useErr == nil {
+				if handle.DBMap == nil {
+					handle.DBMap = make(map[string]*sql.DB)
+				}
+				handle.DBMap[databaseName] = handle.DB
+				return handle.DB, nil
+			}
+		} else {
+			cancel()
 		}
+		handle.DisableUse = true
+	} else {
+		handle.DisableUse = true
 	}
 
-	// 2. Open dedicated connection pool for databaseName
 	log.Printf("Creating isolated connection pool for server [%s] database [%s]...", handle.ServerName, databaseName)
 	targetConnStr := a.buildConnStrWithRaw(handle.RawConnStr, databaseName)
 	targetDb, err := sql.Open("mssql", targetConnStr)
@@ -375,7 +334,10 @@ func (a *App) getDbForDatabaseOnServer(handle *ServerConnectionHandle, databaseN
 		return nil, fmt.Errorf("Error opening connection for database %s: %v", databaseName, err)
 	}
 
-	err = targetDb.PingContext(a.ctx)
+	pingCtx, pingCancel := context.WithTimeout(a.ctx, 10*time.Second)
+	defer pingCancel()
+
+	err = targetDb.PingContext(pingCtx)
 	if err != nil {
 		targetDb.Close()
 		return nil, fmt.Errorf("Error pinging database %s: %v", databaseName, err)
@@ -397,7 +359,12 @@ func (a *App) buildConnStrWithRaw(rawConnStr, dbName string) string {
 	var newParts []string
 	for _, part := range parts {
 		trimmed := strings.TrimSpace(part)
-		if trimmed == "" || strings.HasPrefix(strings.ToLower(trimmed), "database=") {
+		if trimmed == "" {
+			continue
+		}
+		kv := strings.SplitN(trimmed, "=", 2)
+		key := strings.TrimSpace(strings.ToLower(kv[0]))
+		if key == "database" || key == "initial catalog" || key == "catalog" {
 			continue
 		}
 		newParts = append(newParts, trimmed)
